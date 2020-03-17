@@ -16,17 +16,23 @@
 
 
 
+//Thread Queue Lock
 pthread_mutex_t QueueLock;
-std::queue <int> event_queue;
+std::queue <int> event_queue; // Events are Socket Numbers
 
- pthread_mutex_t DictionaryLock;
+
+//Can be upgraded by letting multiple reading using semaphore
+pthread_mutex_t DictionaryLock; // Mutex For Reading-Writing of dictionary.txt
+
 
 class website_handler
 {
 private:
-    std::set <std::string> dictionary;
-    std::map<std::string,char*> page;
-    char *readFile(const char *fileName)
+    std::set <std::string> dictionary; // Current dictionary set
+    
+    std::map<std::string,char*> page; // "page name" -> page_contents
+    
+    char *readFile(const char *fileName) // Read File and return the output as a char pointer
     {
         FILE *file = fopen(fileName, "r");
         char *code;
@@ -45,11 +51,20 @@ public:
     {
 //        init_dictionary();
     }
-    void load(const char *filename)
+    void load(const char *filename) // Loading html file to proccess
     {
         page[filename]=readFile(filename);
     }
-    char* get_page(const char *filename,int request_type,std::string input,std::string text)// get => 0 , post => 1 , put=> 2
+
+     /**
+      * @brief  Returns the wanted page for given params
+      * @param  *filename: 
+      * @param  request_type: get => 0 , post => 1 , put=> 2
+      * @param  input: Add Get request input
+      * @param  text: Add  Body of request(for POST Request)
+      * @retval Char Pointer 
+      */
+    char* get_page(const char *filename,int request_type,std::string input,std::string text)
     {
         std::string str = "HTTP/1.1 200 Okay\r\nContent-Type: text/html; charset=ISO-8859-4 \r\n\r\n" + std::string(page[filename]);
         if(request_type==1)
@@ -74,7 +89,13 @@ public:
         strcpy(cstr, str.c_str());
         return cstr;
     }
-    void add_dictionary(std::string word)
+
+    /**
+     * @brief  Add Word To Dictionary (Both Set and File)
+     * @note   
+     * @param  word: Word To be added, c++ stl format
+     */
+    void add_dictionary(std::string word) // 
     {
         pthread_mutex_lock(&DictionaryLock);
         if (dictionary.count(word)==0)
@@ -87,6 +108,11 @@ public:
         }
         pthread_mutex_unlock(&DictionaryLock);
     }
+    /**
+     * @brief  Add Word To Dictionary (Both Set and File)
+     * @note   
+     * @param  word: Word To be added, c++ stl format
+     */
      int check_dictionary(std::string word)
     {
         pthread_mutex_lock(&DictionaryLock);
@@ -94,13 +120,22 @@ public:
         pthread_mutex_unlock(&DictionaryLock);
         return return_value;
     }
+    /**
+     * @brief  Read dictionary.txt and add all to dictionary set for fast access
+     */
     void init_dictionary()
     {
         pthread_mutex_lock(&DictionaryLock);
         dictionary.insert("");
         FILE *fp;
         fp = fopen("dictionary.txt", "r");
-        if(fp==0) return ;
+        if(fp == NULL || fp==0) //if file does not exist, create it
+        {
+            fp = fopen("dictionary.txt", "w");
+            fclose(fp);
+            pthread_mutex_unlock(&DictionaryLock);
+            return;
+        }
         std::string word;
         char c;
         while((c = getc(fp)) != EOF) {
@@ -126,16 +161,14 @@ class server
 {
 private:
 
-
     int file_descriptor;
     int sizeof_address;
-    
-    int THREAD_COUNT=4;
+    int THREAD_COUNT; 
 
 
     struct sockaddr_in address;
     int server_up;
-    int new_socket()
+    int new_socket()  // New socket for listen
     {
         file_descriptor = socket(AF_INET, SOCK_STREAM, 0);
         if (file_descriptor <= 0)
@@ -145,7 +178,7 @@ private:
         }
         return 0;
     }
-    int bind_address()
+    int bind_address() // Bind address to socket
     {
         int return_value=bind(file_descriptor, (struct sockaddr *) &address, sizeof(address));
         if (return_value < 0)
@@ -165,7 +198,11 @@ private:
         }
         return 0;
     }
-    int accept_connection()
+     /**
+      * @brief  accepts new requests from file_descriptor,
+      * @retval int, the value of the connection socket 
+      */
+    int accept_connection() 
     {
         int connection_value = accept(file_descriptor, (struct sockaddr *)&address, (socklen_t*)&sizeof_address);
         if (connection_value < 0)
@@ -176,6 +213,14 @@ private:
         return connection_value;
     }
 public:
+   
+     /**
+      * @brief  Server Constructer
+      * @param  internet_address: internet address
+      * @param  port_number: port number, Default:80
+      * @param  THREAD_COUNT: Number Of Thread Count for a proccess
+      * @retval 
+     */
     server(int internet_address,int port_number=80,int THREAD_COUNT=10) // 80 for http
     {
         this->THREAD_COUNT = THREAD_COUNT;
@@ -200,6 +245,9 @@ public:
     {
         shutdown(file_descriptor,2);
     }
+    /**
+     * 
+     */
     static void* connection_thread(void *argv)
     {
         while(true)
