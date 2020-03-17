@@ -1,4 +1,4 @@
-# C-Basic-Http-Server
+# Basic-Http-Server-Cpp
 HTTP server implemented in C++ without any third party library.
 
 * Only Used "sys/socket.h" "pthread.h" and "mutex" which are standart libraries 
