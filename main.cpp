@@ -1,10 +1,7 @@
 #include <stdio.h>
-#include <sys/socket.h>
 #include <stdlib.h>
-#include <netinet/in.h>
 #include <string.h>
-#include <unistd.h>
-#include <pthread.h>
+
 #include <queue>
 #include <mutex>
 #include <string>
@@ -12,14 +9,33 @@
 #include <map>
 #include <iostream>
 #include <set>
+#include <thread>
+#include <mutex>
+#include <fstream>
+
+//Unix
+#ifdef _unix
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <unistd.h>
+// #include <pthread.h>  // replaced by <thread>
+#endif //_unix_
+
+//Windows
+#ifdef _WIN32
+#include <winsock2.h>
+#endif //WIN32
+
 #include "html_parser.h"
 
 //Thread Queue Lock
-pthread_mutex_t QueueLock;
+std::mutex QueueLock;
 std::queue < int > event_queue; // Events are Socket Numbers
 
 //Can be upgraded by letting multiple reading using semaphore
-pthread_mutex_t DictionaryLock; // Mutex For Reading-Writing of dictionary.txt
+std::mutex DictionaryLock; // Mutex For Reading-Writing of dictionary.txt
+
+std::mutex CoutLock;
 
 class website_handler {
   private:
@@ -59,6 +75,10 @@ class website_handler {
    * @retval Char Pointer 
    */
   char * get_page(const char * filename, int request_type, std::string input, std::string text) {
+    if(std::fstream(filename).fail()){ // Check if the file exists
+      std::cerr << filename << " could not be opened! Check if the path is correct\n";
+      return "";
+    }
     std::string str = "HTTP/1.1 200 Okay\r\nContent-Type: text/html; charset=ISO-8859-4 \r\n\r\n" + std::string(page[filename]);
     if (request_type == 1) {
       add_dictionary(text);
@@ -84,15 +104,19 @@ class website_handler {
    */
   void add_dictionary(std::string word) // 
   {
-    pthread_mutex_lock( & DictionaryLock);
+    if(word.empty()) return; // Don't write empty words
+    DictionaryLock.lock();
     if (dictionary.count(word) == 0) {
-      FILE * fp;
-      fp = fopen("dictionary.txt", "a+");
-      fprintf(fp, "%s\n", word.c_str());
+      std::ofstream fDictionary("dictionary.txt" , std::ios::app);
+      if(!fDictionary.good()){
+        std::cerr << "Failed to open file\n";
+        fDictionary.close();
+      }
+      fDictionary << word.c_str() << "\n";
+      fDictionary.close();
       dictionary.insert(word);
-      fclose(fp);
     }
-    pthread_mutex_unlock( & DictionaryLock);
+    DictionaryLock.unlock();
   }
   /**
    * @brief  Add Word To Dictionary (Both Set and File)
@@ -100,29 +124,29 @@ class website_handler {
    * @param  word: Word To be added, c++ stl format
    */
   int check_dictionary(std::string word) {
-    pthread_mutex_lock( & DictionaryLock);
+    DictionaryLock.lock();
     int return_value = dictionary.count(word);
-    pthread_mutex_unlock( & DictionaryLock);
+    DictionaryLock.unlock();
     return return_value;
   }
   /**
    * @brief  Read dictionary.txt and add all to dictionary set for fast access
    */
   void init_dictionary() {
-    pthread_mutex_lock( & DictionaryLock);
+    DictionaryLock.lock();
     dictionary.insert("");
-    FILE * fp;
-    fp = fopen("dictionary.txt", "r");
-    if (fp == NULL || fp == 0) //if file does not exist, create it
+    std::ifstream fp("dictionary.txt");
+    if (!fp.good()) //if file does not exist, create it
     {
-      fp = fopen("dictionary.txt", "w");
-      fclose(fp);
-      pthread_mutex_unlock( & DictionaryLock);
+      std::ofstream created("dictionary.txt");
+      created.close();
+      fp.close();
+      DictionaryLock.unlock();
       return;
     }
     std::string word;
     char c;
-    while ((c = getc(fp)) != EOF) {
+    while ((c = fp.get()) != EOF) {
       if (c == '\n') {
         dictionary.insert(word);
         word.clear();
@@ -130,8 +154,8 @@ class website_handler {
     }
     if (word != "")
       dictionary.insert(word);
-    fclose(fp);
-    pthread_mutex_unlock( & DictionaryLock);
+    fp.close();
+    DictionaryLock.unlock();
   }
 };
 
@@ -148,9 +172,10 @@ class server {
   int server_up;
   int new_socket() // New socket for listen
   {
-    file_descriptor = socket(AF_INET, SOCK_STREAM, 0);
-    if (file_descriptor <= 0) {
-      perror("ERROR: Could'nt open socket");
+    file_descriptor = socket(AF_INET, SOCK_STREAM, 0); //! Fails
+    int error = WSAGetLastError();
+    if (file_descriptor == INVALID_SOCKET) {
+      std::cerr << "ERROR Invalid Socket: " << error ;
       return -1;
     }
     return 0;
@@ -159,7 +184,7 @@ class server {
   {
     int return_value = bind(file_descriptor, (struct sockaddr * ) & address, sizeof(address));
     if (return_value < 0) {
-      perror("ERROR: Could'nt bind");
+      perror("ERROR: Could'nt bind\n");
       return -1;
     }
     return 0;
@@ -168,7 +193,7 @@ class server {
   {
     int return_value = listen(file_descriptor, k);
     if (return_value < 0) {
-      perror("ERROR: Could'nt listen");
+      perror("ERROR: Could'nt listen\n");
       return -1;
     }
     return 0;
@@ -178,9 +203,9 @@ class server {
    * @retval int, the value of the connection socket 
    */
   int accept_connection() {
-    int connection_value = accept(file_descriptor, (struct sockaddr * ) & address, (socklen_t * ) & sizeof_address);
+    int connection_value = accept(file_descriptor, (struct sockaddr * ) & address, (int * ) & sizeof_address);
     if (connection_value < 0) {
-      perror("ERROR: Connection Accept Failure");
+      perror("ERROR: Connection Accept Failure\n");
       return -1;
     }
     return connection_value;
@@ -222,59 +247,78 @@ class server {
   static void * connection_thread(void * argv) {
     while (true) {
       int socket_num;
-      pthread_mutex_lock( & QueueLock);
+      QueueLock.lock();
       if (event_queue.empty() == false) {
         socket_num = event_queue.front();
         event_queue.pop();
-        pthread_mutex_unlock( & QueueLock);
+        QueueLock.unlock();
       } else {
-        pthread_mutex_unlock( & QueueLock);
+        QueueLock.unlock();
         continue;
       }
 
       char buffer[1000] = {
         0
       };
-      bzero(buffer, 1000);
-      int buffer_length = recv(socket_num, buffer, 1000, 0);
+      memset(buffer, 0 , 1000);
+      int buffer_length = recv(socket_num, buffer, 1000, 0); //! Returning wrong lnegth
       if (buffer_length < 0) {
-        perror("ERROR: Receiving Failure");
+        perror("ERROR: Receiving Failure\n");
         return NULL;
       }
       html_parser request(buffer, buffer_length);
+      /* CoutLock.lock();
+      std::cout << "Raw request: " << (char*)buffer;
+      CoutLock.unlock(); */
 
       char * message = website.get_page("main.html", request.get_request_type(), request.get_input("name"), request.get_text());
 
       int length = strlen(message);
       int send_value = send(socket_num, message, length, 0);
       if (send_value < 0) {
-        perror("ERROR: Sending Failure");
+        perror("ERROR: Sending Failure\n");
         return NULL;
       }
-      close(socket_num);
+      closesocket(socket_num);
     }
   }
   void start() {
-    if (server_up == 0) return;
+    if (server_up == 0){
+      std::cerr << "Server failed to start!\n";
+      return;
+    }
+    //unix
+    #ifdef _unix_
     pthread_t ptid[THREAD_COUNT];
     for (int i = 0; i < THREAD_COUNT; i++) {
       int return_value = pthread_create( & ptid[i], NULL, connection_thread, (void * ) NULL);
       if (return_value < 0) {
-        perror("ERROR: Could'nt create thread");
+        perror("ERROR: Could'nt create thread\n");
         exit(1);
       }
     }
+    #endif// unix
+
+    #ifdef _WIN32
+    std::vector<std::thread> ptid;
+    for (int i = 0; i < THREAD_COUNT; i++) {
+      ptid.push_back(std::thread(connection_thread , (void*)NULL));   
+    }
+    #endif //WIN32
     while (1) {
       int socket_num = accept_connection();
-      pthread_mutex_lock( & QueueLock);
+      QueueLock.lock();
       event_queue.push(socket_num);
-      pthread_mutex_unlock( & QueueLock);
+      QueueLock.unlock();
     }
   }
 };
 
-int main(int argc, char
-  const * argv[]) {
+int main(int argc, char** argv) {
+  #ifdef _WIN32
+  WSADATA data;
+  WSAStartup(MAKEWORD(2 , 2) , &data);
+  #endif
   website.init_dictionary();
   website.load("main.html");
   server basic_server(0, 80, 10);
