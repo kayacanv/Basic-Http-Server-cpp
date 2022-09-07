@@ -10,7 +10,6 @@
 #include <iostream>
 #include <set>
 #include <thread>
-#include <mutex>
 #include <fstream>
 
 //Unix
@@ -184,7 +183,7 @@ class server {
   {
     int return_value = bind(file_descriptor, (struct sockaddr * ) & address, sizeof(address));
     if (return_value < 0) {
-      perror("ERROR: Could'nt bind\n");
+      perror("ERROR: Couldn't bind\n");
       return -1;
     }
     return 0;
@@ -193,7 +192,7 @@ class server {
   {
     int return_value = listen(file_descriptor, k);
     if (return_value < 0) {
-      perror("ERROR: Could'nt listen\n");
+      perror("ERROR: Couldn't listen\n");
       return -1;
     }
     return 0;
@@ -293,7 +292,7 @@ class server {
     for (int i = 0; i < THREAD_COUNT; i++) {
       int return_value = pthread_create( & ptid[i], NULL, connection_thread, (void * ) NULL);
       if (return_value < 0) {
-        perror("ERROR: Could'nt create thread\n");
+        perror("ERROR: Couldn't create thread\n");
         exit(1);
       }
     }
